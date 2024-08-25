@@ -20,12 +20,12 @@
 
 // Registers common to i386 and x86-64 (E and R prefixes are omitted).
 
-const int AX = 0;
-const int CX = 1;
+#define AX 0
+#define CX 1
 const int DX = 2;
-const int BX = 3;
-const int SP = 4;
-const int BP = 5;
+#define BX 3
+#define SP 4
+#define BP 5
 const int SI = 6;
 const int DI = 7;
 const int R8 = 8;
