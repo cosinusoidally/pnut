@@ -334,7 +334,7 @@ defstr() { # $1 = variable name, $2 = string
 
 _putchar() {
   : $(($1 = 0)); shift # Return 0
-  printf \\$(($1/64))$(($1/8%8))$(($1%8))
+  printf "%b" \\0$(($1/64))$(($1/8%8))$(($1%8))
 }
 
 __stdin_buf=

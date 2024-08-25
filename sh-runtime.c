@@ -22,7 +22,7 @@ RETURN_IF_TRUE(runtime_ ## name ## _defined)
 #endif
 
 #ifdef RT_COMPACT
-#define call_int_to_char(prefix, int_var) putstr(prefix "__char=$(printf \"\\\\$((" int_var "/64))$((" int_var "/8%8))$((" int_var "%8))\")\n");
+#define call_int_to_char(prefix, int_var) putstr(prefix "__char=$(printf \"%b\" \"\\\\0$((" int_var "/64))$((" int_var "/8%8))$((" int_var "%8))\")\n");
 #else
 #define call_int_to_char(prefix, int_var) putstr(prefix "int_to_char \"" int_var "\"\n");
 #endif
@@ -205,7 +205,7 @@ DEFINE_RUNTIME_FUN(int_to_char)
   putstr("    10)  __char=\"\\n\" ;;\n");
   putstr("    *)\n");
   putstr("      echo \"Invalid character code: $1\" ; exit 1\n");
-  putstr("      __char=$(printf \"\\\\$(printf \"%o\" \"$1\")\") ;;\n");
+  putstr("      __char=$(printf \"%b\" \"\\\\0$(printf \"%o\" \"$1\")\") ;;\n");
   putstr("  esac\n");
   putstr("}\n");
 #endif
@@ -602,7 +602,7 @@ END_RUNTIME_FUN(exit)
 DEFINE_RUNTIME_FUN(putchar)
   putstr("_putchar() {\n");
   putstr("  : $(($1 = 0)); shift # Return 0\n");
-  putstr("  printf \\\\$(($1/64))$(($1/8%8))$(($1%8))\n");
+  putstr("  printf \"%b\" \\\\0$(($1/64))$(($1/8%8))$(($1%8))\n");
   putstr("}\n");
 END_RUNTIME_FUN(putchar)
 
@@ -666,7 +666,7 @@ DEPENDS_ON(putchar)
   putstr("  __addr=$1; shift\n");
   putstr("  while [ $((_$__addr)) != 0 ]; do\n");
 #ifdef RT_INLINE_PUTCHAR
-  putstr("    printf \\\\$((_$__addr/64))$((_$__addr/8%8))$((_$__addr%8))\n");
+  putstr("    printf \"%b\" \\\\0$((_$__addr/64))$((_$__addr/8%8))$((_$__addr%8))\n");
 #else
   putstr("    _putchar __ $((_$__addr))\n");
 #endif
@@ -724,7 +724,7 @@ DEPENDS_ON(int_to_char)
   putstr("          ;;\n");
   putstr("        'c') # 99 = 'c' Character\n");
   putstr("          # Don't need to handle non-printable characters the only use of %c is for printable characters\n");
-  putstr("          printf \\\\$(($1/64))$(($1/8%8))$(($1%8))\n");
+  putstr("          printf \"%b\" \\\\0$(($1/64))$(($1/8%8))$(($1%8))\n");
   putstr("          shift\n");
   putstr("          ;;\n");
   putstr("        'x') # 120 = 'x' Hexadecimal integer\n");
@@ -782,7 +782,7 @@ DEPENDS_ON(int_to_char)
   putstr("      case $__head in\n");
   putstr("        10) printf \"\\n\" ;;  # 10 == '\\n'\n");
   putstr("        37) __mod=1 ;; # 37 == '%'\n");
-  putstr("        *) printf \\\\$(($__head/64))$(($__head/8%8))$(($__head%8)) ;;\n");
+  putstr("        *) printf \"%b\" \\\\0$(($__head/64))$(($__head/8%8))$(($__head%8)) ;;\n");
   putstr("      esac\n");
   putstr("    fi\n");
   putstr("  done\n");
@@ -963,7 +963,7 @@ DEPENDS_ON(open)
   putstr("  : $((__i = 0))\n");
   putstr("  while [ $__i -lt $__count ] ; do\n");
   putstr("    : $((__byte = _$((__buf+__i))))\n");
-  putstr("    printf \\\\$(($__byte/64))$(($__byte/8%8))$(($__byte%8)) >&$__fd\n");
+  putstr("    printf \"%b\" \\\\0$(($__byte/64))$(($__byte/8%8))$(($__byte%8)) >&$__fd\n");
   putstr("    : $((__i += 1))\n");
   putstr("  done\n");
   putstr("  : $(($1 = __count))\n");
