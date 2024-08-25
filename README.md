@@ -1,3 +1,5 @@
+cosinusoidally experiments
+
 # 🥜 Pnut: A Self-Compiling C Transpiler Targeting Human-Readable POSIX Shell
 
 Pnut compiles a reasonnably large subset of C99 to human-readable POSIX shell
