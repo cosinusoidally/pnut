@@ -4,7 +4,7 @@ void generate_exe();
 // 1MB heap
 #define RT_HEAP_SIZE 104857600
 
-#define MAX_CODE_SIZE 500000
+#define MAX_CODE_SIZE 5000000
 int code[MAX_CODE_SIZE];
 int code_alloc = 0;
 
@@ -145,6 +145,7 @@ void jump_rel(int offset);
 void call(int lbl);
 void call_reg(int reg);
 void ret();
+void debug_interrupt();
 
 void load_mem_location(int dst, int base, int offset, int width, bool is_signed) {
   if (is_signed) {
@@ -313,6 +314,9 @@ void os_open();
 void os_close();
 void os_seek();
 void os_unlink();
+void os_mkdir();
+void os_chmod();
+void os_access();
 
 void rt_putchar();
 void rt_debug(char* msg);
@@ -342,6 +346,9 @@ int open_lbl;
 int close_lbl;
 int seek_lbl;
 int unlink_lbl;
+int mkdir_lbl;
+int chmod_lbl;
+int access_lbl;
 
 int word_size_align(int n) {
   return (n + WORD_SIZE - 1) / WORD_SIZE * WORD_SIZE;
@@ -362,6 +369,9 @@ void grow_stack_bytes(int bytes) {
   add_reg_imm(reg_SP, -word_size_align(bytes));
 }
 
+void rt_debug(char* msg);
+void rt_crash(char* msg);
+
 // Label definition
 
 enum {
@@ -369,9 +379,14 @@ enum {
   GOTO_LABEL,
 };
 
-#ifdef SAFE_MODE
-int labels[100000];
+#if defined (UNDEFINED_LABELS_ARE_RUNTIME_ERRORS) || defined (SAFE_MODE)
+#define LABELS_ARR_SIZE 100000
+int labels[LABELS_ARR_SIZE];
 int labels_ix = 0;
+
+#ifdef UNDEFINED_LABELS_ARE_RUNTIME_ERRORS
+void def_label(int lbl);
+#endif
 
 void assert_all_labels_defined() {
   int i = 0;
@@ -379,6 +394,19 @@ void assert_all_labels_defined() {
   // Check that all labels are defined
   for (; i < labels_ix; i++) {
     lbl = labels[i];
+#ifdef UNDEFINED_LABELS_ARE_RUNTIME_ERRORS
+    if (heap[lbl + 1] > 0) {
+      if (heap[lbl] == GENERIC_LABEL && heap[lbl + 2] != 0) {
+        def_label(lbl);
+        rt_debug("Function or label is not defined\n");
+        rt_debug("name = ");
+        rt_debug((char*) heap[lbl + 2]);
+        rt_debug("\n");
+        // TODO: This should crash but let's just return for now to see how far we can get
+        ret();
+      }
+    }
+#else
     if (heap[lbl + 1] > 0) {
       putstr("Label ");
       if (heap[lbl] == GENERIC_LABEL && heap[lbl + 2] != 0) {
@@ -389,18 +417,25 @@ void assert_all_labels_defined() {
       putstr(" is not defined\n");
       exit(1);
     }
+#endif
   }
 }
 
 void add_label(int lbl) {
+  if (labels_ix >= LABELS_ARR_SIZE) fatal_error("labels array is full");
+
   labels[labels_ix++] = lbl;
 }
 
 int alloc_label(char* name) {
-  int lbl = alloc_obj(3);
+  int lbl = alloc_obj(5);
   heap[lbl] = GENERIC_LABEL;
   heap[lbl + 1] = 0; // Address of label
   heap[lbl + 2] = (intptr_t) name; // Name of label
+  heap[lbl + 3] = (intptr_t) fp_filepath;
+#ifdef INCLUDE_LINE_NUMBER_ON_ERROR
+  heap[lbl + 4] = line_number;
+#endif
   add_label(lbl);
   return lbl;
 }
@@ -455,7 +490,21 @@ void def_label(int lbl) {
   if (heap[lbl] != GENERIC_LABEL) fatal_error("def_label expects generic label");
 
   if (addr < 0) {
-    fatal_error("label defined more than once");
+#ifdef SAFE_MODE
+    putstr("Label ");
+    if (heap[lbl + 2] != 0) {
+      putstr((char*) heap[lbl + 2]);
+    } else {
+      putint(lbl);
+    }
+    putstr(" previously defined at ");
+    putstr((char*) heap[lbl + 3]);
+#ifdef INCLUDE_LINE_NUMBER_ON_ERROR
+    putstr(":");
+    putint(heap[lbl + 4]);
+#endif
+    fatal_error(" being redefined");
+#endif
   } else {
     heap[lbl + 1] = -label_addr; // define label's address
     while (addr != 0) {
@@ -641,6 +690,9 @@ int type_width(ast type, bool array_value, bool word_align) {
     case LONG_KW:
 #if WORD_SIZE == 8
       width = 8;
+      break;
+#elif defined (BOOTSTRAP_LONG)
+      width = 4;
       break;
 #else
       fatal_error("type_width: long type not supported");
@@ -1179,6 +1231,11 @@ void codegen_call(ast node) {
 
   // Check if the function is a direct call, find the binding if it is
   if (get_op(fun) == IDENTIFIER) {
+    if (get_val_(IDENTIFIER, fun) == intern_str("PNUT_INLINE_INTERRUPT")) {
+      debug_interrupt();
+      push_reg(reg_X); // Dummy push to keep the stack balanced
+      return;
+    }
     binding = resolve_identifier(get_val_(IDENTIFIER, fun));
     if (binding_kind(binding) != BINDING_FUN) binding = 0;
   }
@@ -1331,8 +1388,35 @@ int codegen_lvalue(ast node) {
       codegen_lvalue(child1);
       lvalue_width = type_width(child0, true, false);
       grow_fs(-1); // grow_fs is called at the end of the function, so we need to decrement it here
+    } else if (op == PARENS) {
+      lvalue_width = codegen_lvalue(child0);
+      grow_fs(-1);
     } else {
       fatal_error("codegen_lvalue: unknown lvalue with 2 children");
+    }
+
+  } else if (nb_children == 3) {
+
+    if (op == '?') {
+
+      int lbl1 = alloc_label(0); // false label
+      int lbl2 = alloc_label(0); // end label
+      codegen_rvalue(child0);
+      pop_reg(reg_X);
+      grow_fs(-1);
+      xor_reg_reg(reg_Y, reg_Y);
+      jump_cond_reg_reg(EQ, lbl1, reg_X, reg_Y);
+      lvalue_width = codegen_lvalue(child1); // value when true, assume that lvalue_width is the same for both cases
+      jump(lbl2);
+      def_label(lbl1);
+      grow_fs(-1); // here, the child#1 is not on the stack, so we adjust it
+      codegen_lvalue(get_child_('?', node, 2)); // value when false
+      grow_fs(-1); // grow_fs(1) is called by codegen_rvalue and at the end of the function
+      def_label(lbl2);
+
+    } else {
+      putstr("op="); putint(op); putchar('\n');
+      fatal_error("codegen_lvalue: unknown lvalue with 3 children");
     }
 
   } else {
@@ -1706,6 +1790,15 @@ void codegen_begin() {
   unlink_lbl = alloc_label("unlink");
   cgc_add_global_fun(init_ident(IDENTIFIER, "unlink"), unlink_lbl, function_type1(int_type, string_type));
 
+  mkdir_lbl = alloc_label("mkdir");
+  cgc_add_global_fun(init_ident(IDENTIFIER, "mkdir"), mkdir_lbl, function_type2(int_type, string_type, int_type));
+
+  chmod_lbl = alloc_label("chmod");
+  cgc_add_global_fun(init_ident(IDENTIFIER, "chmod"), chmod_lbl, function_type2(int_type, string_type, int_type));
+
+  access_lbl = alloc_label("access");
+  cgc_add_global_fun(init_ident(IDENTIFIER, "access"), access_lbl, function_type2(int_type, string_type, int_type));
+
 #ifndef NO_BUILTIN_LIBC
   putchar_lbl = alloc_label("putchar");
   cgc_add_global_fun(init_ident(IDENTIFIER, "putchar"), putchar_lbl, function_type1(void_type, char_type));
@@ -1751,7 +1844,7 @@ void codegen_enum(ast node) {
 
   while (cases != 0) {
     cas = car_('=', cases);
-    cgc_add_enum(get_val_(IDENTIFIER, get_child__('=', IDENTIFIER, cas, 0)), get_child__('=', INTEGER, cas, 1));
+    cgc_add_enum(get_val_(IDENTIFIER, get_child__('=', IDENTIFIER, cas, 0)), get_child_('=', cas, 1));
     cases = tail(cases);
   }
 }
@@ -2391,6 +2484,10 @@ void codegen_glo_fun_decl(ast node) {
     binding = cgc_globals;
   }
 
+  // Poor man's debug info
+  debug_interrupt(); // Marker to helps us find the function in the disassembly
+  codegen_string(name_probe);
+
   def_label(heap[binding+4]);
 
   // if (fp_filepath[0] != 'p' || fp_filepath[1] != 'o' || fp_filepath[2] != 'r' || fp_filepath[3] != 't') {
@@ -2469,12 +2566,11 @@ void rt_debug(char* msg) {
     rt_putchar();
     msg += 1;
   }
-  mov_reg_imm(reg_X, '\n');
-  rt_putchar();
 }
 
 void rt_crash(char* msg) {
   rt_debug(msg);
+  mov_reg_imm(reg_X, 42); // exit code
   os_exit();
 }
 
@@ -2521,7 +2617,7 @@ void rt_malloc() {
   // Make sure the heap is large enough.
   // new bump pointer (reg_x) >= end of heap (reg_y)
   jump_cond_reg_reg(LE, end_lbl, reg_X, reg_Y);
-  rt_crash("Heap overflow");
+  rt_crash("Heap overflow\n");
 
   def_label(end_lbl);
   mov_reg_mem(reg_Y, reg_glo, WORD_SIZE); // Old bump pointer
@@ -2624,6 +2720,26 @@ void codegen_end() {
   os_unlink();
   ret();
 
+  // mkdir function
+  def_label(mkdir_lbl);
+  mov_reg_mem(reg_X, reg_SP, WORD_SIZE);   // pathname
+  mov_reg_mem(reg_Y, reg_SP, 2*WORD_SIZE); // mode
+  os_mkdir();
+
+  // chmod function
+  def_label(chmod_lbl);
+  mov_reg_mem(reg_X, reg_SP, WORD_SIZE);   // pathname
+  mov_reg_mem(reg_Y, reg_SP, 2*WORD_SIZE); // mode
+  os_chmod();
+  ret();
+
+  // stat function
+  def_label(access_lbl);
+  mov_reg_mem(reg_X, reg_SP, WORD_SIZE);   // pathname
+  mov_reg_mem(reg_Y, reg_SP, 2*WORD_SIZE); // mode
+  os_access();
+  ret();
+
 #ifndef NO_BUILTIN_LIBC
   // putchar function
   def_label(putchar_lbl);
@@ -2662,7 +2778,7 @@ void codegen_end() {
 
   // printf function stub
   def_label(printf_lbl);
-  rt_crash("printf is not supported yet.");
+  rt_crash("printf is not supported yet.\n");
   ret();
 #endif
 

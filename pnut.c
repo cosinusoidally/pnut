@@ -1711,16 +1711,21 @@ void init_pnut_macros() {
   init_builtin_int_macro("PNUT_EXE_32", 1);
   init_builtin_int_macro("PNUT_I386", 1);
   init_builtin_int_macro("PNUT_I386_LINUX", 1);
+  init_builtin_int_macro("__linux__", 1);
+  init_builtin_int_macro("__i386__", 1);
 #elif defined (target_x86_64_linux)
   init_builtin_int_macro("PNUT_EXE", 1);
   init_builtin_int_macro("PNUT_EXE_64", 1);
   init_builtin_int_macro("PNUT_X86_64", 1);
   init_builtin_int_macro("PNUT_X86_64_LINUX", 1);
+  init_builtin_int_macro("__linux__", 1);
+  init_builtin_int_macro("__x86_64__", 1);
 #elif defined (target_x86_64_mac)
   init_builtin_int_macro("PNUT_EXE", 1);
   init_builtin_int_macro("PNUT_EXE_64", 1);
   init_builtin_int_macro("PNUT_X86_64", 1);
   init_builtin_int_macro("PNUT_X86_64_MAC", 1);
+  init_builtin_int_macro("__x86_64__", 1);
 #endif
 
 }
@@ -2200,6 +2205,11 @@ void get_tok() {
             tok = tok == INTEGER_LL ? INTEGER_ULL : INTEGER_UL;
             get_ch();
           }
+        } else if (ch == 'f' || ch == '.') {
+          get_ch();
+          tok = INTEGER;
+          while (accum_digit(10)); // Skip the fractional part
+          val = 0; // Force the value to be 0 for now. TODO: Convert to float
         }
 #endif
 
@@ -2659,7 +2669,12 @@ ast parse_enum() {
         }
         last_literal_type = get_op(value);
 #else
+        if (get_op(value) != INTEGER
+        && get_op(value) != INTEGER_U && get_op(value) != INTEGER_UL && get_op(value) != INTEGER_ULL
+        && get_op(value) != INTEGER_L && get_op(value) != INTEGER_LL
+           ) {
         value = new_ast0(last_literal_type, -eval_constant(value, false)); // negative value to indicate it's a small integer
+        }
 #endif
         next_value = get_val(value) - 1; // Next value is the current value + 1, but val is negative
       } else {
@@ -2766,7 +2781,7 @@ ast parse_type_specifier() {
     case CHAR_KW:
     case INT_KW:
     case VOID_KW:
-#ifdef DEBUG_PARSER
+#ifndef sh
     case FLOAT_KW:
     case DOUBLE_KW:
 #endif
@@ -2799,7 +2814,7 @@ ast parse_type_specifier() {
 
     case LONG_KW:
       get_tok();
-#ifdef DEBUG_PARSER
+#ifndef sh
       if (tok == DOUBLE_KW) {
         get_tok();
         return new_ast0(DOUBLE_KW, 0);
